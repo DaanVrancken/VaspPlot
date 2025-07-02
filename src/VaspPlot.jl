@@ -4,15 +4,70 @@ export extract_energies, extract_projections, extract_MLWFs, plot_bands
 
 using CairoMakie
 
-# Define functions
-function remove_slices(arr::AbstractArray, dim::Int, indices_to_remove)
+"""
+    remove_slices(arr::AbstractArray, dim::Int64, indices_to_remove)
+
+Removes slices from an N-dimensional array along a specified dimension.
+
+# Arguments
+- `arr::AbstractArray`: The input N-dimensional array.
+- `dim::Int`: The dimension along which to remove slices.
+- `indices_to_remove`: An iterable (e.g., Vector, Set) of indices to remove along `dim`.
+
+# Returns
+- A new array with the specified slices removed.
+
+# Examples
+```julia
+julia> A = [1 2 3; 4 5 6; 7 8 9]
+3×3 Matrix{Int64}:
+ 1  2  3
+ 4  5  6
+ 7  8  9
+
+julia> remove_slices(A, 1, [2])
+2×3 Matrix{Int64}:
+ 1  2  3
+ 7  8  9
+
+julia> remove_slices(A, 2, [1, 3])
+3×1 Matrix{Int64}:
+ 2
+ 5
+ 8
+```
+"""
+function remove_slices(arr::AbstractArray, dim::Int64, indices_to_remove)
     all_indices = 1:size(arr, dim)
     indices_to_keep = filter(i -> !(i in indices_to_remove), all_indices)
     slices = ntuple(d -> d == dim ? indices_to_keep : Colon(), ndims(arr))
     return arr[slices...]
 end
 
-function find_klabels(kpoints, path_length)
+"""
+    find_klabels(kpoints, path_length::Int64)
+
+Identifies high-symmetry k-point labels (e.g., Γ, X, Y) from a list of k-points.
+This function is specifically tailored for VASP band structure calculations where
+k-points are generated along high-symmetry lines.
+
+# Arguments
+- `kpoints`: A matrix where each row represents a k-point coordinate (e.g., `Nk x 3` matrix).
+- `path_length::Int`: The number of steps (k-points) along each high-symmetry path segment 
+                        as defined in the VASP KPOINTS file.
+
+# Returns
+- `klabels::Vector{String}`: A vector of strings containing the identified high-symmetry
+                              labels or empty strings if no standard label is found.
+- `k_ind::Vector{Int}`: A vector of indices in the `kpoints` array corresponding to the
+                        positions where labels are assigned.
+
+# Notes
+- The function uses a small tolerance (`atol=1e-10`) for floating-point comparisons
+  to identify k-points.
+- Currently supports common high-symmetry points: Γ, X, Y, Z, S, U, T, R.
+"""
+function find_klabels(kpoints, path_length::Int64)
     steps = path_length-1
     N_labels = (size(kpoints,1)-1) ÷ steps
     k_ind = 1:steps:(1+N_labels*steps)
@@ -41,6 +96,46 @@ function find_klabels(kpoints, path_length)
     return klabels, k_ind
 end
 
+"""
+    orbs_to_indices(orbs::Union{Vector{String}, Vector{Int64}})
+
+Converts a vector of orbital names (strings) or direct orbital indices (integers)
+into a sorted, unique list of numerical orbital indices.
+
+# Arguments
+- `orbs::Union{Vector{String}, Vector{Int64}}`: A vector containing orbital names
+  (e.g., "s", "px", "dxy", "t2g") or integer indices (e.g., 1, 2, 5).
+  Supported string orbitals and their corresponding 1-based indices:
+  - "s": 1
+  - "py": 2, "pz": 3, "px": 4, "p": [2, 3, 4]
+  - "dxy": 5, "dyz": 6, "dz2": 7, "dxz": 8, "x2-y2": 9, "d": [5, 6, 7, 8, 9]
+  - "t2g": [5, 6, 8], "eg": [7, 9]
+  - "fy3x2": 10, "fxyz": 11, "fyz2": 12, "fz3": 13, "fxz2": 14, "fzx2": 15, "fx3": 16,
+    "f": [10, 11, 12, 13, 14, 15, 16]
+
+# Returns
+- `indices::Vector{Int}`: A sorted vector of unique integer orbital indices.
+
+# Throws
+- `ErrorException`: If an orbital name is not found in the predefined dictionary.
+
+# Examples
+```julia
+julia> orbs_to_indices(["s", "pz", "dxy"])
+3-element Vector{Int64}:
+ 1
+ 3
+ 5
+
+julia> orbs_to_indices([1, "p", 7])
+4-element Vector{Int64}:
+ 1
+ 2
+ 3
+ 4
+ 7
+```
+"""
 function orbs_to_indices(orbs::Union{Vector{String}, Vector{Int64}})
     orb_indices = Dict("s"=>1, "py" => 2, "pz"=>3, "px"=>4, "p" => [2,3,4],
                     "dxy"=>5, "dyz"=>6, "dz2"=>7, "dxz"=>8, "x2-y2"=>9, "d"=>[5,6,7,8,9],
@@ -66,7 +161,34 @@ function orbs_to_indices(orbs::Union{Vector{String}, Vector{Int64}})
     return sort(unique(indices))
 end
 
-function extract_energies(OUTCAR)
+"""
+    extract_energies(OUTCAR::String)
+
+Extracts band energies, k-points, Fermi energy, and system information from a VASP OUTCAR file.
+The extracted energies are shifted such that the Fermi energy is at 0 eV.
+
+# Arguments
+- `OUTCAR::String`: The path to the VASP OUTCAR file.
+
+# Returns
+- `Dict`: A dictionary containing the extracted data:
+    - `"klabels"::Vector{String}`: High-symmetry k-point labels.
+    - `"k_ind"::Vector{Int}`: Indices of high-symmetry k-points.
+    - `"E"::Array{Float64, 3}`: Band energies (k-points x bands x spin components),
+                                 relative to the Fermi energy.
+    - `"system"::String`: The system name extracted from the OUTCAR.
+
+# Throws
+- `ErrorException`: If critical information (e.g., "points on each line segment",
+                    "Dimension of arrays:", "Fermi energy:") is not found in the OUTCAR.
+- `ErrorException`: If the OUTCAR structure for spin components is unexpected.
+
+# Notes
+- This function assumes a specific format for the OUTCAR file, typical for VASP band structure calculations.
+- It automatically handles single-spin and spin-polarized calculations.
+- Duplicate k-points (often present at high-symmetry points) are removed.
+"""
+function extract_energies(OUTCAR::String)
     lines = readlines(OUTCAR)
 
     Nk = 0
@@ -143,6 +265,35 @@ function extract_energies(OUTCAR)
     return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system)
 end
 
+"""
+    extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{Vector{String}, Vector{Int64}})
+
+Extracts projected band contributions from a VASP PROCAR-like file.
+
+# Arguments
+- `filename::String`: The path to the PROCAR-like file (e.g., PROCAR).
+- `ions::Vector{Int64}`: A vector of 1-based indices of ions for which to sum projections.
+- `orbs::Union{Vector{String}, Vector{Int64}}`: A vector of orbital names (e.g., "s", "p", "d")
+                                               or direct orbital indices (1-based) to sum.
+                                               See `orbs_to_indices` for supported orbital names.
+
+# Returns
+- `projections::Array{Float64, 3}`: An array of projected weights with dimensions
+                                    (k-points x bands x spin components).
+                                    For non-spin-polarized calculations, spin component dimension is 1.
+                                    For spin-polarized, it's 2 (spin-up, spin-down).
+                                    For non-collinear, it's 4 (spin-up, spin-down, spin-x, spin-y).
+
+# Throws
+- `ErrorException`: If the specified `filename` does not exist.
+- `ErrorException`: If header information (k-points, bands, ions) cannot be parsed.
+- `ErrorException`: If k-point or band indices cannot be parsed from the file.
+- `ErrorException`: If orbital indices exceed the number of available orbitals in a line.
+
+# Notes
+- This function assumes a specific format for the PROCAR-like file.
+- It detects the number of spin components based on the file content.
+"""
 function extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{Vector{String}, Vector{Int64}})
     if !isfile(filename)
         error("File not found: $filename")
@@ -239,7 +390,27 @@ function extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{
     return projections
 end
 
-function extract_MLWFs(wannier_file)
+"""
+    extract_MLWFs(wannier_file::String)
+
+Extracts Maximally Localized Wannier Functions (MLWFs) data from a Wannier90 `.eig` or similar output file.
+This function assumes the file contains energy values for each MLWF, separated by blank lines.
+
+# Arguments
+- `wannier_file::String`: The path to the Wannier90 output file (e.g., `wannier90.eig`).
+
+# Returns
+- `MLWFs_array::Matrix{Float64}`: A 2D array where each row represents an MLWF and
+                                   columns represent the energy values at different k-points.
+
+# Examples
+```julia
+# Assuming 'wannier90.eig' exists with appropriate content
+# MLWFs_data = extract_MLWFs("wannier90.eig")
+# size(MLWFs_data) # (number of MLWFs, number of k-points)
+```
+"""
+function extract_MLWFs(wannier_file::String)
     lines = readlines(wannier_file)
 
     MLWFs = []
@@ -261,6 +432,52 @@ function extract_MLWFs(wannier_file)
     return MLWFs_array
 end
 
+"""
+    plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path="", double_plot=false, k_labels::Vector{String}=[" "], spinor_component::Int64=4)
+
+Plots electronic band structures, optionally with projected contributions or Wannier functions.
+
+# Arguments
+- `bands::Dict`: A dictionary containing band structure data, typically from `extract_energies`.
+                 Expected keys: `"klabels"`, `"k_ind"`, `"E"`, `"system"`.
+- `proj::Union{Nothing, AbstractArray}`: Optional. An array of projected weights (k-points x bands x spin components),
+                                         typically from `extract_projections`. If provided, bands will be colored
+                                         according to these projections.
+- `wann::Union{Nothing, AbstractMatrix}`: Optional. A matrix of Maximally Localized Wannier Function (MLWF) energies
+                                          (MLWFs x k-points), typically from `extract_MLWFs`. If provided, MLWFs
+                                          will be overlaid as scatter points.
+- `ylims::Tuple{Float64, Float64}`: Optional. Y-axis limits for the plot (energy range). Default is `(-5.0, 5.0)`.
+- `path::String`: Optional. The directory path where the plot image will be saved. Default is current directory.
+- `double_plot::Bool`: Optional. If `true` and `bands["E"]` has two spin components, it will create two separate
+                       panels for spin-up and spin-down bands. Default is `false`.
+- `k_labels::Vector{String}`: Optional. Custom k-point labels to use instead of those extracted from `bands`.
+                              Must match the number of symmetry points (`length(bands["k_ind"])`).
+                              Default uses labels from `bands`.
+- `spinor_component::Int64`: Optional. Relevant for non-collinear spin calculations (`proj` with 4 spin components).
+                             Specifies which spinor component (1 to 4) to plot. Default is `4`.
+
+# Returns
+- `Nothing`: The function saves the plot to a file and does not return a value.
+
+# Side Effects
+- Creates a PNG image file named `bands_SYSTEM.png` in the specified `path`.
+
+# Dependencies
+- Requires `Makie.jl` and `Colors.jl` (for `RGBf`).
+- Assumes `L` for LaTeX strings is available (e.g., from `LaTeXStrings.jl`).
+
+# Examples
+```julia
+# Assuming 'band_data' is a dictionary from extract_energies
+# plot_bands(band_data)
+
+# Plot with projections and custom y-limits
+# plot_bands(band_data, proj=projection_data, ylims=(-3.0, 2.0))
+
+# Plot spin-polarized bands in two separate panels
+# plot_bands(band_data_spin, double_plot=true)
+```
+"""
 function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path="", double_plot=false, k_labels::Vector{String}=[" "], spinor_component::Int64=4)
     klabels = bands["klabels"]
     k_ind = bands["k_ind"]
@@ -397,4 +614,4 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
     save(joinpath(path,"bands_"*system*".png"), fig, px_per_unit = 300/inch)
 end
 
-end # module VaspPlot
+end
