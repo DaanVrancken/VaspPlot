@@ -225,7 +225,7 @@ function extract_energies(OUTCAR::String)
 
     for i in i0:length(lines)
         if occursin("Fermi energy:", lines[i])
-            Ef[1] = parse.(Float64, split(lines[i])[3])
+            Ef[1] = parse.(Float64, last(split(lines[i])))
             i0 = i
             break
         end
@@ -611,7 +611,15 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
         end
     end
 
-    save(joinpath(path,"bands_"*system*".png"), fig, px_per_unit = 300/inch)
+    app = "_bands"
+    if !isnothing(proj)
+        app = "_proj"
+    end
+    if !isnothing(wann)
+        app = "_wann"
+    end
+
+    save(joinpath(path,system*app*".png"), fig, px_per_unit = 300/inch)
 end
 
 end
