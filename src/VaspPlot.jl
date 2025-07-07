@@ -1,6 +1,6 @@
 module VaspPlot
 
-export extract_energies, extract_projections, extract_MLWFs, plot_bands
+export extract_energies, extract_projections, extract_MLWFs, plot_bands, calc_hopping
 
 using CairoMakie
 
@@ -301,7 +301,6 @@ function extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{
 
     num_k_points = 0
     num_bands = 0
-    num_ions = 0
     num_spin_components = 1
 
     current_k_point_idx = 0
@@ -322,7 +321,6 @@ function extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{
             if match_params !== nothing
                 num_k_points = parse(Int, match_params.captures[1])
                 num_bands = parse(Int, match_params.captures[2])
-                num_ions = parse(Int, match_params.captures[3])
             else
                 error("Could not parse k-points, bands, and ions from header line 2.")
             end
@@ -354,6 +352,11 @@ function extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{
             # Delete extra whitespace
             stripped_line = strip(line)
 
+            # Go to next spin component
+            if startswith(stripped_line, "# of k-points")
+                current_spin_idx +=1
+            end
+
             # Detect k-punt section
             if startswith(stripped_line, "k-point")
                 match_kpt = match(r"k-point\s+(\d+)\s*:", stripped_line)
@@ -379,10 +382,6 @@ function extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{
                     error("Orbital indices exceed number of orbitals in line: $stripped_line")
                 end
                 projections[current_k_point_idx, current_band_idx, current_spin_idx] += sum(parse.(Float64, split(stripped_line))[orb_indices.+1])
-            # Go to next spin component
-            elseif startswith(stripped_line, "tot")
-                current_spin_idx +=1
-                current_spin_idx = mod1(current_spin_idx, num_spin_components)
             end
         end
     end
@@ -620,6 +619,64 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
     end
 
     save(joinpath(path,system*app*".png"), fig, px_per_unit = 300/inch)
+end
+
+function extract_coefficents(wanproj::String)
+    Spin, Nk, Nb, Nw = 0, 0, 0, 0
+    Nb_max = 0
+    Nb_min = Inf
+
+    # Extract header information
+    for line in eachline(wanproj)
+        # Find the header line with Spin, Nk, Nb, Nw
+        match_header = match(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", line)
+        # Find each coefficient line with Nb, Nw, and coefficients
+        match_coeff = match(r"^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$", line)
+        if match_header !== nothing
+            Spin, Nk, Nb, Nw = parse.(Int, match_header.captures)
+        elseif match_coeff !== nothing
+            Nb_max = max(Nb_max, parse(Int, match_coeff.captures[1]))
+            Nb_min = Int(min(Nb_min, parse(Int, match_coeff.captures[1])))
+        end
+    end
+    if Spin*Nk*Nb*Nw*Nb_max/Nb_min == 0
+        error("One or more variables not found in $wanproj. Nk, Nb, Nw, Spin, Nb_max, Nb_min: $Nk, $Nb, $Nw, $Spin, $Nb_max, $Nb_min")
+    end
+
+    # Initialize arrays for coefficients and k-points
+    coefficients = zeros(ComplexF64, Nk, Nb_max-Nb_min+1, Nw, Spin)
+    kpoints = zeros(Float64, Nk, 3)
+    k = 0
+    s = 0
+
+    for line in eachline(wanproj)
+        # Find each block line with spin, local Nb, and k-point
+        match_block = match(r"^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$", line)
+        # Find each coefficient line with band number, wannier function, and coefficients
+        match_coeff = match(r"^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$", line)
+
+        if match_block !== nothing
+            k += 1
+            kpoints[k,:] = parse.(Float64, match_block.captures[3:5])
+            s = parse(Int, match_block.captures[1])
+        end
+        if match_coeff !== nothing
+            b, w = parse.(Int, match_coeff.captures[1:2])
+            b = b - Nb_min + 1  # Adjust band index to be 1-based and within range
+            c_real, c_im = parse.(Float64, match_coeff.captures[3:4])
+            coefficients[k, b, w, s] = ComplexF64(c_real, c_im)
+        end
+    end
+
+    return coefficients, kpoints
+end
+
+function calc_hopping(wanproj::String, outcar::String; neighbours::Vector{Vector{Int64}}=[[1,0,0],[0,1,0],[0,0,1]])
+    coefficients, kpoints = extract_coefficents(wanproj)
+    bands = extract_energies(outcar)
+    E = bands["E"]
+
+    # compute t_ij = - <w_i|H|w_j> = -∑_α,β,k <c_αi^* exp(ik.R_i)ψ_α^*|H|c_βj exp(-ik.R_j)ψ_β> / Nk^2 = -∑_α,k exp(ik.(R_i-R_j)) E_α / Nk^2
 end
 
 end
