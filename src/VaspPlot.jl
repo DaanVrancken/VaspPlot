@@ -140,7 +140,7 @@ new_ind2, new_lab2 = merge_indices_and_labels(ind2, lab2)
                                    # This docstring reflects the correct output for the given logic.
 """
 function merge_indices_and_labels(ind::Vector{Int}, lab::Vector{String})
-    new_ind = eltype(ind)[] # Initialize an empty array for new indices
+    new_ind = Float64[] # Initialize an empty array for new indices
     new_lab = eltype(lab)[] # Initialize an empty array for new labels
 
     i = 1
