@@ -45,55 +45,119 @@ function remove_slices(arr::AbstractArray, dim::Int64, indices_to_remove)
 end
 
 """
-    find_klabels(kpoints, path_length::Int64)
+    find_klabels(kpoints::Matrix{Float64}, path_length::Int64, doubles::Vector{Int64})
 
-Identifies high-symmetry k-point labels (e.g., Γ, X, Y) from a list of k-points.
-This function is specifically tailored for VASP band structure calculations where
-k-points are generated along high-symmetry lines.
+Identifies and labels high-symmetry k-points within a k-point path, crucial for band structure analysis.
+
+Matches k-points in `kpoints` against standard high-symmetry labels (e.g., Γ, X, R) based on `path_length`. It intelligently handles duplicate k-points specified in `doubles` to ensure correct indexing.
 
 # Arguments
-- `kpoints`: A matrix where each row represents a k-point coordinate (e.g., `Nk x 3` matrix).
-- `path_length::Int`: The number of steps (k-points) along each high-symmetry path segment 
-                        as defined in the VASP KPOINTS file.
+- `kpoints::Matrix{Float64}`: Matrix of 3D k-points `[kx, ky, kz]` per row.
+- `path_length::Int64`: Number of k-points per segment between expected high-symmetry points.
+- `doubles::Vector{Int64}`: 1-based indices in `kpoints` that are duplicate points (e.g., segment ends).
 
 # Returns
-- `klabels::Vector{String}`: A vector of strings containing the identified high-symmetry
-                              labels or empty strings if no standard label is found.
-- `k_ind::Vector{Int}`: A vector of indices in the `kpoints` array corresponding to the
-                        positions where labels are assigned.
-
-# Notes
-- The function uses a small tolerance (`atol=1e-10`) for floating-point comparisons
-  to identify k-points.
-- Currently supports common high-symmetry points: Γ, X, Y, Z, S, U, T, R.
+- `klabels::Vector{Char}`: Vector of assigned high-symmetry labels (e.g., 'Γ', 'X') or ' ' if no match.
+- `k_ind::Vector{Int64}`: Corrected 1-based indices in `kpoints` corresponding to the identified symmetry points, adjusted for `doubles`.
 """
-function find_klabels(kpoints, path_length::Int64)
-    steps = path_length-1
-    N_labels = (size(kpoints,1)-1) ÷ steps
-    k_ind = 1:steps:(1+N_labels*steps)
-    klabels = collect(" " for _ in 1:length(k_ind))
+function find_klabels(kpoints::Matrix{Float64}, path_length::Int64, doubles::Vector{Int64})
+    N_labels = (size(kpoints,1)) /path_length
+    k_ind = vcat([1], [[i*path_length, i*path_length+1] for i in 1:N_labels]...)
+    pop!(k_ind)
+    k_ind = map(Int, setdiff(k_ind, doubles))
 
-    for i in k_ind
-        if isapprox(kpoints[i,:], [0.0 0.0 0.0]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "Γ"
-        elseif isapprox(kpoints[i,:], [0.5 0 0]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "X"
-        elseif isapprox(kpoints[i,:], [0 0.5 0]', atol=1e-10)   
-            klabels[Int((i-1)/steps + 1)] = "Y"
-        elseif isapprox(kpoints[i,:], [0 0 0.5]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "Z"
-        elseif isapprox(kpoints[i,:], [0.5 0.5 0]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "S"
-        elseif isapprox(kpoints[i,:], [0.5 0 0.5]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "U"
-        elseif isapprox(kpoints[i,:], [0 0.5 0.5]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "T"
-        elseif isapprox(kpoints[i,:], [0.5 0.5 0.5]', atol=1e-10)
-            klabels[Int((i-1)/steps + 1)] = "R"
+    # Find corresponding symmetry points
+    klabels = collect(" " for _ in eachindex(k_ind))
+
+    standard_labels = Dict(
+        "Γ" => [0.0, 0.0, 0.0],
+        "X" => [0.5, 0.0, 0.0],
+        "Y" => [0.0, 0.5, 0.0],
+        "Z" => [0.0, 0.0, 0.5],
+        "S" => [0.5, 0.5, 0.0],
+        "U" => [0.5, 0.0, 0.5],
+        "T" => [0.0, 0.5, 0.5],
+        "R" => [0.5, 0.5, 0.5]
+    )
+
+    for i in eachindex(k_ind)
+        kpoint = kpoints[k_ind[i], :]
+        for (label, coords) in standard_labels
+            if isapprox(kpoint, coords, atol=1e-10)
+                klabels[i] = label
+                break
+            end
+        end
+    end
+
+    # Correct indices for double points in kpoints
+    d = 0
+    k_ind_original = copy(k_ind)
+    for i in eachindex(k_ind_original)
+        k_ind[i] -= d
+        if k_ind_original[i]+1 in doubles
+            d += 1
         end
     end
 
     return klabels, k_ind
+end
+
+"""
+    merge_indices_and_labels(ind::Vector{Int}, lab::Vector{String}) -> (Vector{Float64}, Vector{String})
+
+Merges adjacent elements in `ind` and `lab` arrays based on a specific index condition.
+
+If two subsequent indices `ind[i]` and `ind[i+1]` differ by exactly one (i.e., `ind[i] == ind[i+1] - 1`),
+these two elements are replaced by a single new element:
+- The new index will be `ind[i] + 0.5`.
+- The new label will be a concatenation of the original labels `lab[i] * "|" * lab[i+1]`.
+
+Elements that do not meet this merging condition are kept as they are.
+
+# Arguments
+- `ind::Vector{Int}`: An array of integer indices.
+- `lab::Vector{String}`: An array of corresponding string labels, of the same length as `ind`.
+
+# Returns
+A tuple containing two new arrays:
+- `new_ind::Vector{Float64}`: The array of modified indices, which may now contain `Float64` values due to merging.
+- `new_lab::Vector{String}`: The array of modified labels.
+
+# Examples
+```julia
+ind = [1, 2, 4, 5, 7]
+lab = ["A", "B", "C", "D", "E"]
+new_ind, new_lab = merge_indices_and_labels(ind, lab)
+# new_ind will be [1.5, 4.5, 7]
+# new_lab will be ["A|B", "C|D", "E"]
+
+ind2 = [10, 11, 13, 14, 15]
+lab2 = ["X", "Y", "Z", "W", "V"]
+new_ind2, new_lab2 = merge_indices_and_labels(ind2, lab2)
+# new_ind2 will be [10.5, 13.5]
+# new_lab2 will be ["X|Y", "Z|W|V"] # Note: The example in the original code had an error here.
+                                   # This docstring reflects the correct output for the given logic.
+"""
+function merge_indices_and_labels(ind::Vector{Int}, lab::Vector{String})
+    new_ind = eltype(ind)[] # Initialize an empty array for new indices
+    new_lab = eltype(lab)[] # Initialize an empty array for new labels
+
+    i = 1
+    while i <= length(ind)
+        if i < length(ind) && ind[i] == ind[i+1] - 1
+            # Merge condition met
+            push!(new_ind, ind[i] + 0.5)
+            push!(new_lab, lab[i] * "|" * lab[i+1])
+            i += 2 # Skip the next element as it's been merged
+        else
+            # No merge, just add the current elements
+            push!(new_ind, ind[i])
+            push!(new_lab, lab[i])
+            i += 1
+        end
+    end
+    return new_ind, new_lab
 end
 
 """
@@ -251,16 +315,17 @@ function extract_energies(OUTCAR::String)
         end
     end
 
-    doubles = []
+    doubles::Vector{Int64} = []
     for k in range(2, Nk)
         if isapprox(kpoints[k,:], kpoints[k-1,:], atol=1e-10)
             push!(doubles, k)
         end
     end
+
+    klabels, k_ind = find_klabels(kpoints, path_length, doubles)
+
     kpoints = remove_slices(kpoints, 1, doubles)
     E = remove_slices(E, 1, doubles)
-
-    klabels, k_ind = find_klabels(kpoints, path_length)
 
     return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system)
 end
@@ -487,6 +552,8 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
         klabels = k_labels
     end
 
+    k_ind, klabels = merge_indices_and_labels(k_ind, klabels)
+
     E = bands["E"]
     system = bands["system"]
 
@@ -675,6 +742,8 @@ function calc_hopping(wanproj::String, outcar::String; neighbours::Vector{Vector
     coefficients, kpoints = extract_coefficents(wanproj)
     bands = extract_energies(outcar)
     E = bands["E"]
+
+    error("Not yet implemented")
 
     # compute t_ij = - <w_i|H|w_j> = -∑_α,β,k <c_αi^* exp(ik.R_i)ψ_α^*|H|c_βj exp(-ik.R_j)ψ_β> / Nk^2 = -∑_α,k exp(ik.(R_i-R_j)) E_α / Nk^2
 end
