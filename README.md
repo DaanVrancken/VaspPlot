@@ -8,7 +8,7 @@ Then, simply write
 ```
 using VaspPlot
 ```
-on top of your script.
+at the top of your script.
 
 A simple example would look like this
 ```

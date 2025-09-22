@@ -2,7 +2,7 @@ module VaspPlot
 
 export extract_energies, extract_projections, extract_MLWFs, plot_bands, calc_hopping
 
-using CairoMakie
+using LinearAlgebra, CairoMakie
 
 """
     remove_slices(arr::AbstractArray, dim::Int64, indices_to_remove)
@@ -262,8 +262,19 @@ function extract_energies(OUTCAR::String)
     Ef = [0.0, 0.0]
     path_length = 0
     i0 = 0
+    reciprocal_vectors = zeros(3,3)
 
     for i in eachindex(lines)
+        if occursin("reciprocal lattice vectors", lines[i])
+            for j in 1:3
+                reciprocal_vectors[j, :] = parse.(Float64, split(lines[i+j])[4:6])
+            end
+            i0 = i+4
+            break
+        end
+    end
+
+    for i in i0:length(lines)
         if occursin("points on each line segment", lines[i])
             path_length = Int(parse.(Float64, split(lines[i])[2]))
             i0 = i+1
@@ -327,7 +338,10 @@ function extract_energies(OUTCAR::String)
     kpoints = remove_slices(kpoints, 1, doubles)
     E = remove_slices(E, 1, doubles)
 
-    return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system)
+    edges = kpoints[k_ind,:]
+    path_edges = (reciprocal_vectors * edges')'
+
+    return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system, "path_edges" => path_edges)
 end
 
 """
@@ -347,7 +361,7 @@ Extracts projected band contributions from a VASP PROCAR-like file.
                                     (k-points x bands x spin components).
                                     For non-spin-polarized calculations, spin component dimension is 1.
                                     For spin-polarized, it's 2 (spin-up, spin-down).
-                                    For non-collinear, it's 4 (spin-up, spin-down, spin-x, spin-y).
+                                    For non-collinear, it's 4.
 
 # Throws
 - `ErrorException`: If the specified `filename` does not exist.
@@ -496,6 +510,19 @@ function extract_MLWFs(wannier_file::String)
     return MLWFs_array
 end
 
+function find_path_lengths(path_edges::Matrix{Float64}, klabels::Vector{String})
+    path_lengths = zeros(length(klabels))
+    double_counter = 0
+    for i in eachindex(klabels)
+        if length(klabels[i]) > 1
+            double_counter += 1
+        end
+        path_lengths[i] = norm(path_edges[i+1+double_counter] - path_edges[i+double_counter])
+    end
+
+    return path_lengths
+end
+
 """
     plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path="", double_plot=false, k_labels::Vector{String}=[" "], spinor_component::Int64=4)
 
@@ -503,7 +530,7 @@ Plots electronic band structures, optionally with projected contributions or Wan
 
 # Arguments
 - `bands::Dict`: A dictionary containing band structure data, typically from `extract_energies`.
-                 Expected keys: `"klabels"`, `"k_ind"`, `"E"`, `"system"`.
+                 Expected keys: `"klabels"`, `"k_ind"`, `"E"`, `"system"`, `"path_edges"`.
 - `proj::Union{Nothing, AbstractArray}`: Optional. An array of projected weights (k-points x bands x spin components),
                                          typically from `extract_projections`. If provided, bands will be colored
                                          according to these projections.
@@ -515,7 +542,7 @@ Plots electronic band structures, optionally with projected contributions or Wan
 - `double_plot::Bool`: Optional. If `true` and `bands["E"]` has two spin components, it will create two separate
                        panels for spin-up and spin-down bands. Default is `false`.
 - `k_labels::Vector{String}`: Optional. Custom k-point labels to use instead of those extracted from `bands`.
-                              Must match the number of symmetry points (`length(bands["k_ind"])`).
+                              Must match the number of symmetry points (`length(bands["k_ind"])`). For discontinuous paths, use e.g. `"G|X"`.
                               Default uses labels from `bands`.
 - `spinor_component::Int64`: Optional. Relevant for non-collinear spin calculations (`proj` with 4 spin components).
                              Specifies which spinor component (1 to 4) to plot. Default is `4`.
@@ -551,11 +578,22 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
         end
         klabels = k_labels
     end
+    E = bands["E"]
+    system = bands["system"]
 
     k_ind, klabels = merge_indices_and_labels(k_ind, klabels)
 
-    E = bands["E"]
-    system = bands["system"]
+    # Construct data x-axis
+    path_edges = bands["path_edges"]
+    path_lengths = find_path_lengths(path_edges, klabels)
+    X = zeros(size(E,1))
+    for i in eachindex(path_lengths)
+        X[ceil(Int, k_ind[i]):floor(Int, k_ind[i+1])] .+= range(0, path_lengths[i], length=floor(Int,k_ind[i+1])-ceil(Int,k_ind[i])+1)
+        if i != length(path_lengths)
+            X[floor(Int, k_ind[i+1])+1:end] .+= path_lengths[i]
+        end
+    end
+    x_ticks = vcat(0, cumsum(path_lengths))
 
     bar_limts = (0,1)
     if !isnothing(proj)
@@ -577,12 +615,12 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
 
     ax = Axis(fig[1, 1], 
           ylabel = L"E - E_F \;\; \textrm{[eV]}",
-          limits = (1, size(E, 1), ylims[1], ylims[2]),
+          limits = (1, first(X), last(X), ylims[1], ylims[2]),
           xlabelsize = 11pt,
           ylabelsize = 11pt, 
           xticklabelsize = 8pt,
           yticklabelsize = 8pt,
-          xticks = (k_ind, klabels),
+          xticks = (x_ticks, klabels),
           xticksize = 5pt,
           yticksize = 5pt,
           xtickalign=1,
@@ -613,12 +651,12 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
             Colorbar(fig[1,4], limits = bar_limts, colormap = :Reds_8, flipaxis = true, ticklabelsize=8pt)
         end
         ax2 = Axis(fig[1, panel_number], 
-            limits = (1, size(E, 1), ylims[1], ylims[2]),
+            limits = (1, first(X), last(X), ylims[1], ylims[2]),
             xlabelsize = 11pt,
             ylabelsize = 11pt, 
             xticklabelsize = 8pt,
             yticklabelsize = 8pt,
-            xticks = (k_ind, klabels),
+            xticks = (x_ticks, klabels),
             xticksize = 5pt,
             yticksize = 5pt,
             xtickalign=1,
@@ -640,7 +678,7 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
         for s in axes(E, 3)
             panel = ax
             Ec = copy(E[:, b, s])
-            x = range(1,length(Ec))
+            x_values = copy(X)
             ls = :solid
             if s==1
                 color=RGBf(0.251, 0.388, 0.847)
@@ -656,17 +694,18 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
                 color = proj[:, b, s]
                 append!(color, 0, 1)
                 append!(Ec, 0, 0)
-                x = range(1,length(Ec))
+                push!(x_values, maximum(X)+1)
             end
             if !double_plot && s==2
-                linesegments!(panel, x, Ec, color=color, linestyle=ls, linewidth=2, colormap=colormap)
+                linesegments!(panel, x_values, Ec, color=color, linestyle=ls, linewidth=2, colormap=colormap)
             else
-                lines!(panel, x, Ec, color=color, linestyle=ls, linewidth=2, colormap=colormap)
+                lines!(panel, x_values, Ec, color=color, linestyle=ls, linewidth=2, colormap=colormap)
             end
         end
     end
 
     if !isnothing(wann)
+        # Wannier90 uses constant k-density instead of constant segment size
         for w in axes(wann, 1)
             scatter!(ax, range(1,size(E,1), length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
         end
@@ -742,6 +781,8 @@ function calc_hopping(wanproj::String, outcar::String; neighbours::Vector{Vector
     coefficients, kpoints = extract_coefficents(wanproj)
     bands = extract_energies(outcar)
     E = bands["E"]
+
+    # E = E[x+1:x+size(coefficients,1)),:,:]
 
     error("Not yet implemented")
 
