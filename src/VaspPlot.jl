@@ -510,7 +510,7 @@ function extract_MLWFs(wannier_file::String)
     return MLWFs_array
 end
 
-function find_path_lengths(path_edges::Matrix{Float64}, klabels::Vector{String})
+function find_path_lengths(path_edges::LinearAlgebra.Adjoint{Float64, Matrix{Float64}}, klabels::Vector{String})
     path_lengths = zeros(length(klabels))
     double_counter = 0
     for i in eachindex(klabels)
