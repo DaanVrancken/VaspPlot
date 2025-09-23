@@ -511,13 +511,13 @@ function extract_MLWFs(wannier_file::String)
 end
 
 function find_path_lengths(path_edges::LinearAlgebra.Adjoint{Float64, Matrix{Float64}}, klabels::Vector{String})
-    path_lengths = zeros(length(klabels))
+    path_lengths = zeros(length(klabels)-1)
     double_counter = 0
-    for i in eachindex(klabels)
+    for i in eachindex(path_lengths)
         if length(klabels[i]) > 1
             double_counter += 1
         end
-        path_lengths[i] = norm(path_edges[i+1+double_counter] - path_edges[i+double_counter])
+        path_lengths[i] = norm(path_edges[i+1+double_counter,:] - path_edges[i+double_counter,:])
     end
 
     return path_lengths
