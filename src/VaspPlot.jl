@@ -615,7 +615,7 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
 
     ax = Axis(fig[1, 1], 
           ylabel = L"E - E_F \;\; \textrm{[eV]}",
-          limits = (1, first(X), last(X), ylims[1], ylims[2]),
+          limits = (first(X), last(X), ylims[1], ylims[2]),
           xlabelsize = 11pt,
           ylabelsize = 11pt, 
           xticklabelsize = 8pt,
@@ -651,7 +651,7 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
             Colorbar(fig[1,4], limits = bar_limts, colormap = :Reds_8, flipaxis = true, ticklabelsize=8pt)
         end
         ax2 = Axis(fig[1, panel_number], 
-            limits = (1, first(X), last(X), ylims[1], ylims[2]),
+            limits = (first(X), last(X), ylims[1], ylims[2]),
             xlabelsize = 11pt,
             ylabelsize = 11pt, 
             xticklabelsize = 8pt,
@@ -707,11 +707,11 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
     if !isnothing(wann)
         # Wannier90 uses constant k-density instead of constant segment size
         for w in axes(wann, 1)
-            scatter!(ax, range(1,size(E,1), length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
+            scatter!(ax, range(0,maximum(X),length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
         end
         if double_plot
             for w in axes(wann, 1)
-                scatter!(ax2, range(1,size(E,1), length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
+                scatter!(ax2, range(0,maximum(X),length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
             end
         end
     end
