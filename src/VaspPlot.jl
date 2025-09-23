@@ -716,7 +716,7 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
                 color = proj[:, b, s]
                 append!(color, 0, 1)
                 append!(Ec, 0, 0)
-                push!(x_values, maximum(X)+1)
+                push!(x_values, maximum(X)+0.1, maximum(X)+0.2)
             end
             if !double_plot && s==2
                 linesegments!(panel, x_values, Ec, color=color, linestyle=ls, linewidth=2, colormap=colormap)
