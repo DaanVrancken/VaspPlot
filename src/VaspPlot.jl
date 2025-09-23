@@ -510,6 +510,28 @@ function extract_MLWFs(wannier_file::String)
     return MLWFs_array
 end
 
+"""
+    find_path_lengths(path_edges::LinearAlgebra.Adjoint{Float64, Matrix{Float64}}, 
+                      klabels::Vector{String})
+
+Compute the Euclidean distances between consecutive points along a path.
+
+# Arguments
+- `path_edges::LinearAlgebra.Adjoint{Float64, Matrix{Float64}}`: 
+    A 2D array (as an adjoint of a matrix) containing the coordinates of the 
+    path points. Each row corresponds to a point in space.
+- `klabels::Vector{String}`: 
+    Labels for the path points. If a label has length > 1, it indicates a 
+    duplicated or merged point, and the indexing is adjusted accordingly.
+
+# Returns
+- `Vector{Float64}`: Distances between consecutive valid path points. 
+  The result has length `length(klabels) - 1`.
+
+# Notes
+- The function maintains a counter to skip over duplicated labels.
+- Distances are computed using the Euclidean norm (`LinearAlgebra.norm`).
+"""
 function find_path_lengths(path_edges::LinearAlgebra.Adjoint{Float64, Matrix{Float64}}, klabels::Vector{String})
     path_lengths = zeros(length(klabels)-1)
     double_counter = 0
@@ -705,7 +727,6 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
     end
 
     if !isnothing(wann)
-        # Wannier90 uses constant k-density instead of constant segment size
         for w in axes(wann, 1)
             scatter!(ax, range(0,maximum(X),length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
         end
