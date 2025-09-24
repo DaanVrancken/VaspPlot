@@ -344,6 +344,60 @@ function extract_energies(OUTCAR::String)
     return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system, "path_edges" => path_edges)
 end
 
+function extract_energies_lwl(OUTCAR::String)
+    lines = readlines(OUTCAR)
+
+    Nk = 0
+    Nb = 0
+    system = ""
+    spin = 1
+    Ef = [0.0, 0.0]
+    i0 = 0
+
+    for i in eachindex(lines)
+        if occursin("Dimension of arrays:", lines[i])
+            Nk = parse.(Int, split(lines[i+1])[4])
+            Nb = parse.(Int, last(split(lines[i+1])))
+            system = last(split(lines[i+13]))
+            i0 = i+14
+            break
+        end
+    end
+    if Nk == 0
+        error("Line with 'Dimension of arrays:' not found in OUTCAR.")
+    end
+
+    for i in i0:length(lines)
+        if occursin("Fermi energy:", lines[i])
+            Ef[1] = parse.(Float64, last(split(lines[i])))
+            i0 = i
+            break
+        end
+    end
+
+    if occursin("spin component 1", lines[i0+2])
+        spin = 2
+        i0 = i0+2
+        Ef[2] = parse.(Float64, split(lines[(Nk*(Nb+3)+3) + i0-2])[3])
+    elseif !occursin("k-point     1 :", lines[i0+2])
+        error("Line with 'Fermi energy:' not found in OUTCAR.")
+    end
+
+    kpoints = zeros(Nk, 3)
+    E = zeros(Nk, Nb, spin)
+
+    for k in range(1, Nk)
+        kpoints[k, :] = parse.(Float64, split(lines[(k-1)*(Nb+3) + i0+2])[4:6])
+        for b in range(1, Nb)
+            for s in range(1, spin)
+                E[k, b, s] = parse(Float64, split(lines[b + (k-1)*(Nb+3) + (s-1)*(Nk*(Nb+3)+3) + i0+3])[2]) - Ef[s]
+            end
+        end
+    end
+
+    return Dict("kpoints" => kpoints, "E" => E, "system" => system)
+end
+
 """
     extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{Vector{String}, Vector{Int64}})
 
@@ -508,6 +562,13 @@ function extract_MLWFs(wannier_file::String)
     end
 
     return MLWFs_array
+end
+
+function extract_MLWFs(wannier_1::String, wannier_2::String)
+    MLWFs_up = extract_MLWFs(wannier_1)
+    MLWFs_down = extract_MLWFs(wannier_2)
+
+    return Dict("up" => MLWFs_up, "down" => MLWFs_down)
 end
 
 """
@@ -727,12 +788,19 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
     end
 
     if !isnothing(wann)
-        for w in axes(wann, 1)
-            scatter!(ax, range(0,maximum(X),length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
+        if typeof(wann) == Dict{String, Matrix{Float64}}
+            wann1 = wann["up"]
+            wann2 = wann["down"]
+        else
+            wann1 = copy(wann)
+            wann2 = copy(wann)
+        end
+        for w in axes(wann1, 1)
+            scatter!(ax, range(0,maximum(X),length(wann1[w,:])), wann1[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
         end
         if double_plot
-            for w in axes(wann, 1)
-                scatter!(ax2, range(0,maximum(X),length(wann[w,:])), wann[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
+            for w in axes(wann2, 1)
+                scatter!(ax2, range(0,maximum(X),length(wann2[w,:])), wann2[w,:], color=RGBf(0.22, 0.596, 0.149), markersize=3)
             end
         end
     end
@@ -783,9 +851,11 @@ function extract_coefficents(wanproj::String)
         match_coeff = match(r"^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$", line)
 
         if match_block !== nothing
-            k += 1
-            kpoints[k,:] = parse.(Float64, match_block.captures[3:5])
+            k = mod1(k+1, Nk)
             s = parse(Int, match_block.captures[1])
+            if s == 1
+                kpoints[k,:] = parse.(Float64, match_block.captures[3:5])
+            end
         end
         if match_coeff !== nothing
             b, w = parse.(Int, match_coeff.captures[1:2])
