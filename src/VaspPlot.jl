@@ -344,60 +344,6 @@ function extract_energies(OUTCAR::String)
     return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system, "path_edges" => path_edges)
 end
 
-function extract_energies_lwl(OUTCAR::String)
-    lines = readlines(OUTCAR)
-
-    Nk = 0
-    Nb = 0
-    system = ""
-    spin = 1
-    Ef = [0.0, 0.0]
-    i0 = 0
-
-    for i in eachindex(lines)
-        if occursin("Dimension of arrays:", lines[i])
-            Nk = parse.(Int, split(lines[i+1])[4])
-            Nb = parse.(Int, last(split(lines[i+1])))
-            system = last(split(lines[i+13]))
-            i0 = i+14
-            break
-        end
-    end
-    if Nk == 0
-        error("Line with 'Dimension of arrays:' not found in OUTCAR.")
-    end
-
-    for i in i0:length(lines)
-        if occursin("Fermi energy:", lines[i])
-            Ef[1] = parse.(Float64, last(split(lines[i])))
-            i0 = i
-            break
-        end
-    end
-
-    if occursin("spin component 1", lines[i0+2])
-        spin = 2
-        i0 = i0+2
-        Ef[2] = parse.(Float64, split(lines[(Nk*(Nb+3)+3) + i0-2])[3])
-    elseif !occursin("k-point     1 :", lines[i0+2])
-        error("Line with 'Fermi energy:' not found in OUTCAR.")
-    end
-
-    kpoints = zeros(Nk, 3)
-    E = zeros(Nk, Nb, spin)
-
-    for k in range(1, Nk)
-        kpoints[k, :] = parse.(Float64, split(lines[(k-1)*(Nb+3) + i0+2])[4:6])
-        for b in range(1, Nb)
-            for s in range(1, spin)
-                E[k, b, s] = parse(Float64, split(lines[b + (k-1)*(Nb+3) + (s-1)*(Nk*(Nb+3)+3) + i0+3])[2]) - Ef[s]
-            end
-        end
-    end
-
-    return Dict("kpoints" => kpoints, "E" => E, "system" => system)
-end
-
 """
     extract_projections(filename::String, ions::Vector{Int64}, orbs::Union{Vector{String}, Vector{Int64}})
 
@@ -818,8 +764,10 @@ end
 
 function extract_coefficents(wanproj::String)
     Spin, Nk, Nb, Nw = 0, 0, 0, 0
-    Nb_max = 0
-    Nb_min = Inf
+    Nb_max_up = 0
+    Nb_min_up = Inf
+    Nb_max_down = 0
+    Nb_min_down = Inf
 
     # Extract header information
     for line in eachline(wanproj)
@@ -827,16 +775,29 @@ function extract_coefficents(wanproj::String)
         match_header = match(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", line)
         # Find each coefficient line with Nb, Nw, and coefficients
         match_coeff = match(r"^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$", line)
+        match_block_header = match(r"^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s+(-?\d+\.\d+(?:[eE][-+]?\d+)?)\s*$", line)
         if match_header !== nothing
             Spin, Nk, Nb, Nw = parse.(Int, match_header.captures)
+        elseif match_block_header !== nothing
+            s =  parse(Int, match_block_header.captures[1])
         elseif match_coeff !== nothing
-            Nb_max = max(Nb_max, parse(Int, match_coeff.captures[1]))
-            Nb_min = Int(min(Nb_min, parse(Int, match_coeff.captures[1])))
+            if s==1
+                Nb_max_up = max(Nb_max_up, parse(Int, match_coeff.captures[1]))
+                Nb_min_up = Int(min(Nb_min_up, parse(Int, match_coeff.captures[1])))
+            elseif s==2
+                Nb_max_down = max(Nb_max_down, parse(Int, match_coeff.captures[1]))
+                Nb_min_down = Int(min(Nb_min_down, parse(Int, match_coeff.captures[1])))
+            else
+                error("Unexpected spin value $s found in $wanproj")
+            end
         end
     end
-    if Spin*Nk*Nb*Nw*Nb_max/Nb_min == 0
-        error("One or more variables not found in $wanproj. Nk, Nb, Nw, Spin, Nb_max, Nb_min: $Nk, $Nb, $Nw, $Spin, $Nb_max, $Nb_min")
+    if Spin*Nk*Nb*Nw*Nb_max_up/Nb_min_up == 0
+        error("One or more variables not found in $wanproj. Nk, Nb, Nw, Spin, Nb_max, Nb_min: $Nk, $Nb, $Nw, $Spin, $Nb_max_up, $Nb_min_up")
     end
+    
+    Nb_max = max(Nb_max_up, Nb_max_down)
+    Nb_min = min(Nb_min_up, Nb_min_down)
 
     # Initialize arrays for coefficients and k-points
     coefficients = zeros(ComplexF64, Nk, Nb_max-Nb_min+1, Nw, Spin)
@@ -865,19 +826,152 @@ function extract_coefficents(wanproj::String)
         end
     end
 
-    return coefficients, kpoints
+    return coefficients, kpoints, Nb_min_up, Nb_max_up, Nb_min_down, Nb_max_down
 end
 
-function calc_hopping(wanproj::String, outcar::String; neighbours::Vector{Vector{Int64}}=[[1,0,0],[0,1,0],[0,0,1]])
-    coefficients, kpoints = extract_coefficents(wanproj)
-    bands = extract_energies(outcar)
-    E = bands["E"]
-
-    # E = E[x+1:x+size(coefficients,1)),:,:]
-
-    error("Not yet implemented")
-
-    # compute t_ij = - <w_i|H|w_j> = -∑_α,β,k <c_αi^* exp(ik.R_i)ψ_α^*|H|c_βj exp(-ik.R_j)ψ_β> / Nk^2 = -∑_α,k exp(ik.(R_i-R_j)) E_α / Nk^2
+function extract_excluded_bands(win::String)
+       # Read all lines from the file
+    lines = readlines(win)
+    
+    # Find the line containing "exclude_bands"
+    line = nothing
+    for l in lines
+        if occursin(r"^\s*exclude_bands", l)
+            line = l
+            break
+        end
+    end
+    line === nothing && return Int[]  # no excluded bands found
+    
+    # Remove "exclude_bands", separators (:, =, or whitespace), and extra spaces
+    clean = replace(line, r"^\s*exclude_bands\s*[:=]?\s*" => "")
+    
+    # Split by commas
+    parts = split(clean, ",")
+    
+    excluded = Int[]
+    for part in parts
+        part = strip(part)
+        if isempty(part)
+            continue
+        elseif occursin("-", part)  # handle ranges like 6-8
+            a, b = split(part, "-")
+            append!(excluded, parse(Int, a):parse(Int, b))
+        else
+            push!(excluded, parse(Int, part))
+        end
+    end
+    
+    return sort(unique(excluded))
 end
+
+function map_to_original_bands(bands_kept::Vector{Int}, excluded::Vector{Int})
+    max_band = maximum(vcat(bands_kept, excluded))
+    all_bands = collect(1:max_band)
+    
+    non_excluded = setdiff(all_bands, excluded)
+    
+    return non_excluded[bands_kept]
+end
+
+function extract_energies_eig(wannier_eig::String, win::String, Nb_min::Int64, Nb_max::Int64)
+    Nk = 0
+    Nb_found = 0
+
+    # First pass: find dimensions
+    for line in eachline(wannier_eig)
+        fields = split(strip(line))
+        b = parse(Int, fields[1])
+        k = parse(Int, fields[2])
+        Nb_found = max(Nb_found, b)
+        Nk = max(Nk, k)
+    end
+
+    excluded = extract_excluded_bands(win)
+    bands = map_to_original_bands(collect(1:Nb_found), excluded)
+
+    if maximum(bands) < Nb_max || minimum(bands) > Nb_min
+        error("Bands in $wannier_eig do not match the specified range Nb_min=$Nb_min, Nb_max=$Nb_max after excluding bands: $excluded")
+    end
+
+    E = zeros(Nk, Nb_max-Nb_min+1)
+
+    for line in eachline(wannier_eig)
+        fields = split(strip(line))
+        b = parse(Int, fields[1])
+        b_index = bands[b] - Nb_min + 1
+        k = parse(Int, fields[2])
+        E[k, b_index] = parse(Float64, fields[3])
+    end
+
+    return E
+end
+
+function calc_hopping(neighbours::Vector{Vector{Int64}}=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]; file_directory=".")
+    win = joinpath(file_directory, "wannier90.win")
+    wanproj = joinpath(file_directory, "WANPROJ")
+    wannier_eig = joinpath(file_directory, "wannier90.eig")
+    win1 = joinpath(file_directory, "wannier90.1.win")
+    win2 = joinpath(file_directory, "wannier90.2.win")
+    wannier_eig1 = joinpath(file_directory, "wannier90.1.eig")
+    wannier_eig2 = joinpath(file_directory, "wannier90.2.eig")
+
+    if !isfile(wanproj)
+        error("WANPROJ file not found in $file_directory")
+    end
+    if !isfile(win) && (!isfile(win1) || !isfile(win2))
+        error("No wannier90.win file found in $file_directory")
+    end
+    if !isfile(wannier_eig) && (!isfile(wannier_eig1) || !isfile(wannier_eig2))
+        error("No wannier90.eig file found in $file_directory")
+    end
+
+    coefficients, kpoints, Nb_min_up, Nb_max_up, Nb_min_down, Nb_max_down = extract_coefficents(wanproj)
+
+    Nk = size(coefficients, 1)
+    Nw = size(coefficients, 3)
+    Spin = size(coefficients, 4)
+    Nb = maximum([Nb_max_up-Nb_min_up+1, Nb_max_down-Nb_min_down+1])
+
+    if isfile(wannier_eig)
+        E = extract_energies_eig(wannier_eig, win, Nb_min_up, Nb_max_up)
+        if Spin == 2
+            error("Spin-polarized coefficients found in WANPROJ, but only one wannier90.eig file present.")
+        end
+    else
+        E_up = extract_energies_eig(wannier_eig1, win1, Nb_min_up, Nb_max_up)
+        E_down = extract_energies_eig(wannier_eig2, win2, Nb_min_down, Nb_max_down)
+    end
+
+    if Spin == 1
+        t = zeros(ComplexF64, Nw, Nw, length(neighbours))
+    else
+        t = zeros(ComplexF64, Nw, Nw, length(neighbours), Spin)
+    end
+    
+    for R in eachindex(neighbours)
+        for i in range(1,Nw)
+            for j in range(1,Nw)
+                for k in range(1,Nk)
+                    for b in range(1,Nb)
+                        if Spin == 1
+                            t[i,j,R] -= coefficients[k,b,i,1]' * coefficients[k,b,j,1] * E[k,b] * exp(2im * π * dot(kpoints[k,:], neighbours[R]))
+                        else
+                            if b <= Nb_max_up-Nb_min_up+1
+                                t[i,j,R,1] -= coefficients[k,b,i,1]' * coefficients[k,b,j,1] * E_up[k,b] * exp(2im * π * dot(kpoints[k,:], neighbours[R]))
+                            end
+                            if b <= Nb_max_down-Nb_min_down+1
+                                t[i,j,R,2] -= coefficients[k,b,i,2]' * coefficients[k,b,j,2] * E_down[k,b] * exp(2im * π * dot(kpoints[k,:], neighbours[R]))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return t./Nk
+end
+
 
 end
