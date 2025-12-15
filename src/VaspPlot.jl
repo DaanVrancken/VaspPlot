@@ -18,7 +18,6 @@ Removes slices from an N-dimensional array along a specified dimension.
 - A new array with the specified slices removed.
 
 # Examples
-```julia
 julia> A = [1 2 3; 4 5 6; 7 8 9]
 3×3 Matrix{Int64}:
  1  2  3
@@ -34,8 +33,6 @@ julia> remove_slices(A, 2, [1, 3])
 3×1 Matrix{Int64}:
  2
  5
- 8
-```
 """
 function remove_slices(arr::AbstractArray, dim::Int64, indices_to_remove)
     all_indices = 1:size(arr, dim)
@@ -123,21 +120,6 @@ Elements that do not meet this merging condition are kept as they are.
 A tuple containing two new arrays:
 - `new_ind::Vector{Float64}`: The array of modified indices, which may now contain `Float64` values due to merging.
 - `new_lab::Vector{String}`: The array of modified labels.
-
-# Examples
-```julia
-ind = [1, 2, 4, 5, 7]
-lab = ["A", "B", "C", "D", "E"]
-new_ind, new_lab = merge_indices_and_labels(ind, lab)
-# new_ind will be [1.5, 4.5, 7]
-# new_lab will be ["A|B", "C|D", "E"]
-
-ind2 = [10, 11, 13, 14, 15]
-lab2 = ["X", "Y", "Z", "W", "V"]
-new_ind2, new_lab2 = merge_indices_and_labels(ind2, lab2)
-# new_ind2 will be [10.5, 13.5]
-# new_lab2 will be ["X|Y", "Z|W|V"] # Note: The example in the original code had an error here.
-                                   # This docstring reflects the correct output for the given logic.
 """
 function merge_indices_and_labels(ind::Vector{Int}, lab::Vector{String})
     new_ind = Float64[] # Initialize an empty array for new indices
@@ -182,23 +164,6 @@ into a sorted, unique list of numerical orbital indices.
 
 # Throws
 - `ErrorException`: If an orbital name is not found in the predefined dictionary.
-
-# Examples
-```julia
-julia> orbs_to_indices(["s", "pz", "dxy"])
-3-element Vector{Int64}:
- 1
- 3
- 5
-
-julia> orbs_to_indices([1, "p", 7])
-4-element Vector{Int64}:
- 1
- 2
- 3
- 4
- 7
-```
 """
 function orbs_to_indices(orbs::Union{Vector{String}, Vector{Int64}})
     orb_indices = Dict("s"=>1, "py" => 2, "pz"=>3, "px"=>4, "p" => [2,3,4],
@@ -480,13 +445,6 @@ This function assumes the file contains energy values for each MLWF, separated b
 # Returns
 - `MLWFs_array::Matrix{Float64}`: A 2D array where each row represents an MLWF and
                                    columns represent the energy values at different k-points.
-
-# Examples
-```julia
-# Assuming 'wannier90.eig' exists with appropriate content
-# MLWFs_data = extract_MLWFs("wannier90.eig")
-# size(MLWFs_data) # (number of MLWFs, number of k-points)
-```
 """
 function extract_MLWFs(wannier_file::String)
     lines = readlines(wannier_file)
@@ -585,18 +543,6 @@ Plots electronic band structures, optionally with projected contributions or Wan
 # Dependencies
 - Requires `Makie.jl` and `Colors.jl` (for `RGBf`).
 - Assumes `L` for LaTeX strings is available (e.g., from `LaTeXStrings.jl`).
-
-# Examples
-```julia
-# Assuming 'band_data' is a dictionary from extract_energies
-# plot_bands(band_data)
-
-# Plot with projections and custom y-limits
-# plot_bands(band_data, proj=projection_data, ylims=(-3.0, 2.0))
-
-# Plot spin-polarized bands in two separate panels
-# plot_bands(band_data_spin, double_plot=true)
-```
 """
 function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path="", double_plot=false, k_labels::Vector{String}=[" "], spinor_component::Int64=4)
     klabels = bands["klabels"]
@@ -668,10 +614,9 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
 
     if !isnothing(proj)
         Colorbar(fig[1,2], limits = bar_limts, colormap = :Blues_8, flipaxis = true, ticklabelsize=8pt)
-        if size(proj, 3) == 4
+        if bar_limts == (-1, 1)
             Colorbar(fig[1,2], limits = bar_limts, colormap = :RdBu_8, flipaxis = true, ticklabelsize=8pt)
-        end
-        if !double_plot && size(E, 3) == 2
+        elseif !double_plot && size(E, 3) == 2
             Colorbar(fig[1,3], limits = bar_limts, colormap = :Reds_8, flipaxis = true, ticklabelsize=8pt)
         end
     end
@@ -715,9 +660,6 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
             if s==1
                 color=RGBf(0.251, 0.388, 0.847)
                 colormap=:Blues_8
-                if !isnothing(proj) && size(proj, 3) == 4
-                    colormap = :RdBu_8
-                end
             else
                 color=RGBf(0.796, 0.235, 0.2)
                 colormap=:Reds_8
@@ -730,6 +672,12 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
                 append!(color, 0, 1)
                 append!(Ec, 0, 0)
                 push!(x_values, maximum(X)+0.1, maximum(X)+0.2)
+            end
+            if bar_limts == (-1, 1)
+                colormap = :RdBu_8
+                append!(color, -1)
+                append!(Ec, 0)
+                push!(x_values, maximum(X)+0.3)
             end
             if !double_plot && s==2
                 linesegments!(panel, x_values, Ec, color=color, linestyle=ls, linewidth=2, colormap=colormap)
