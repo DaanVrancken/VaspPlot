@@ -339,7 +339,7 @@ function extract_energies(OUTCAR::String)
     E = remove_slices(E, 1, doubles)
 
     edges = kpoints[k_ind,:]
-    path_edges = (reciprocal_vectors * edges')'
+    path_edges = edges * reciprocal_vectors
 
     return Dict("klabels" => klabels, "k_ind" => k_ind, "E" => E, "system" => system, "path_edges" => path_edges)
 end
