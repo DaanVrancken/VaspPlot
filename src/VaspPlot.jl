@@ -539,7 +539,7 @@ Compute the Euclidean distances between consecutive points along a path.
 - The function maintains a counter to skip over duplicated labels.
 - Distances are computed using the Euclidean norm (`LinearAlgebra.norm`).
 """
-function find_path_lengths(path_edges::LinearAlgebra.Adjoint{Float64, Matrix{Float64}}, klabels::Vector{String})
+function find_path_lengths(path_edges::Matrix{Float64}, klabels::Vector{String})
     path_lengths = zeros(length(klabels)-1)
     double_counter = 0
     for i in eachindex(path_lengths)
