@@ -668,6 +668,9 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
 
     if !isnothing(proj)
         Colorbar(fig[1,2], limits = bar_limts, colormap = :Blues_8, flipaxis = true, ticklabelsize=8pt)
+        if size(proj, 3) == 4
+            Colorbar(fig[1,2], limits = bar_limts, colormap = :RdBu_8, flipaxis = true, ticklabelsize=8pt)
+        end
         if !double_plot && size(E, 3) == 2
             Colorbar(fig[1,3], limits = bar_limts, colormap = :Reds_8, flipaxis = true, ticklabelsize=8pt)
         end
