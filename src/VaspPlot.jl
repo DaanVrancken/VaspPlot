@@ -715,6 +715,9 @@ function plot_bands(bands; proj=nothing, wann=nothing, ylims=(-5.0,5.0), path=""
             if s==1
                 color=RGBf(0.251, 0.388, 0.847)
                 colormap=:Blues_8
+                if !isnothing(proj) && size(proj, 3) == 4
+                    colormap = :RdBu_8
+                end
             else
                 color=RGBf(0.796, 0.235, 0.2)
                 colormap=:Reds_8
