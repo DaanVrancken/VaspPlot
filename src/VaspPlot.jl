@@ -232,7 +232,10 @@ function extract_energies(OUTCAR::String)
     for i in eachindex(lines)
         if occursin("reciprocal lattice vectors", lines[i])
             for j in 1:3
-                reciprocal_vectors[j, :] = parse.(Float64, split(lines[i+j])[4:6])
+                if length(split(lines[i+j])) != 6
+                    @warn "Line $(i+j) does not have 6 vector elements, check that there are three reciprocal components."
+                end
+                reciprocal_vectors[j, :] = parse.(Float64, split(lines[i+j])[end-2:end])
             end
             i0 = i+4
             break
