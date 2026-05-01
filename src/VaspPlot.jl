@@ -2,7 +2,7 @@ module VaspPlot
 
 export extract_energies, extract_projections, extract_MLWFs, plot_bands, calc_hopping
 
-using LinearAlgebra, CairoMakie
+using LinearAlgebra, Statistics, CairoMakie
 
 # ============================================================
 # §1  Array / index helpers
@@ -263,50 +263,44 @@ end
 """
     extract_MLWFs(wannier_file)
 
-Return an (NMLWFs × Nk) matrix of energies from a `wannier90_band.dat` file.
+Return `(energies, kx)` where `energies` is an (NMLWFs x Nk) matrix and
+`kx` is the length-Nk path coordinate as written by Wannier90.
 """
 function extract_MLWFs(wannier_file::String)
-    MLWFs = Vector{Vector{Float64}}()
-    current = Float64[]
+    MLWFs  = Vector{Vector{Float64}}()
+    kxs    = Vector{Vector{Float64}}()
+    E_cur  = Float64[]
+    kx_cur = Float64[]
     for line in readlines(wannier_file)
         if all(isspace, line)
-            isempty(current) || (push!(MLWFs, current); current = Float64[])
+            if !isempty(E_cur)
+                push!(MLWFs, E_cur);  E_cur  = Float64[]
+                push!(kxs,   kx_cur); kx_cur = Float64[]
+            end
         else
-            push!(current, parse(Float64, split(line)[2]))
+            vals = parse.(Float64, split(line))
+            push!(kx_cur, vals[1])
+            push!(E_cur,  vals[2])
         end
     end
-    out = zeros(length(MLWFs), length(MLWFs[1]))
+    # flush last block if file does not end with a blank line
+    !isempty(E_cur) && (push!(MLWFs, E_cur); push!(kxs, kx_cur))
+
+    Nw = length(MLWFs); Nk = length(MLWFs[1])
+    out = zeros(Nw, Nk)
     for (i, m) in enumerate(MLWFs); out[i, :] = m; end
-    return out
+    return out, kxs[1]   # kx is identical for every WF block
 end
 
 function extract_MLWFs(wannier_1::String, wannier_2::String)
-    return Dict("up" => extract_MLWFs(wannier_1), "down" => extract_MLWFs(wannier_2))
+    E_up,   kx = extract_MLWFs(wannier_1)
+    E_down, _  = extract_MLWFs(wannier_2)
+    return Dict("up" => E_up, "down" => E_down), kx
 end
-
-# Allow `extract_MLWFs(...) .- Ef` when the return value is a spin Dict
-Base.:-(d::Dict{String, Matrix{Float64}}, x::Real) = Dict(k => v .- x for (k, v) in d)
-Base.:-(x::Real, d::Dict{String, Matrix{Float64}}) = Dict(k => x .- v for (k, v) in d)
 
 # ============================================================
 # §4  Plotting
 # ============================================================
-
-# Shared axis style keyword arguments (xticks passed separately to avoid type issues)
-function _band_axis_kwargs(xlim, ylims, pt)
-    return (
-        ylabel          = L"E - E_F \;\; \textrm{[eV]}",
-        limits          = (xlim[1], xlim[2], ylims[1], ylims[2]),
-        xlabelsize      = 11pt, ylabelsize  = 11pt,
-        xticklabelsize  = 8pt,  yticklabelsize = 8pt,
-        xticksize       = 5pt,  yticksize   = 5pt,
-        xtickalign = 1, ytickalign = 1,
-        xminortickalign = 1, yminortickalign = 1,
-        xminorticksvisible = false, xgridvisible = true,
-        yminorticksvisible = true,  ygridvisible = false,
-        xminorticks = IntervalsBetween(5), yminorticks = IntervalsBetween(5),
-        xminorticksize = 2.5pt, yminorticksize = 2.5pt)
-end
 
 """
     plot_bands(bands; proj, wann, ylims, path, double_plot, k_labels, spinor_component)
@@ -315,7 +309,7 @@ Save a band-structure PNG.  See README for argument details.
 """
 function plot_bands(bands;
         proj             = nothing,
-        wann             = nothing,
+        wann             = nothing,   # Matrix/Dict, OR (Matrix/Dict, kx::Vector) tuple
         ylims            = (-5.0, 5.0),
         path             = "",
         double_plot      = false,
@@ -357,9 +351,23 @@ function plot_bands(bands;
         fonts           = (; regular = "Dejavu", weird = "Blackchancery"),
         figure_padding  = (4, 4, 4, 8))
 
-    ax_kwargs = _band_axis_kwargs((first(X), last(X)), ylims, pt)
-    ax  = Axis(fig[1, 1]; xticks=(x_ticks, klabels), ax_kwargs...)
-    ax2 = double_plot ? Axis(fig[1, !isnothing(proj) ? 3 : 2]; xticks=(x_ticks, klabels), ax_kwargs...) : nothing
+    function make_axis(col)
+        Axis(fig[1, col];
+            ylabel          = L"E - E_F \;\; \textrm{[eV]}",
+            limits          = (first(X), last(X), ylims[1], ylims[2]),
+            xticks          = (collect(Float64, x_ticks), klabels),
+            xlabelsize      = 11pt, ylabelsize     = 11pt,
+            xticklabelsize  = 8pt,  yticklabelsize = 8pt,
+            xticksize       = 5pt,  yticksize      = 5pt,
+            xtickalign = 1, ytickalign = 1,
+            xminortickalign = 1, yminortickalign = 1,
+            xminorticksvisible = false, xgridvisible = true,
+            yminorticksvisible = true,  ygridvisible = false,
+            xminorticks = IntervalsBetween(5), yminorticks = IntervalsBetween(5),
+            xminorticksize = 2.5pt, yminorticksize = 2.5pt)
+    end
+    ax  = make_axis(1)
+    ax2 = double_plot ? make_axis(!isnothing(proj) ? 3 : 2) : nothing
     hlines!(ax, 0.0, color=:grey41, linestyle=:dash, linewidth=1.5)
     !isnothing(ax2) && hlines!(ax2, 0.0, color=:grey41, linestyle=:dash, linewidth=1.5)
 
@@ -395,18 +403,30 @@ function plot_bands(bands;
 
     # ── Wannier overlay ───────────────────────────────────────
     if !isnothing(wann)
-        wann1 = wann isa Dict ? wann["up"]   : wann
-        wann2 = wann isa Dict ? wann["down"] : wann
-        # Build the same non-uniform x-grid for the Wannier k-points
-        Nk_wann = size(wann1, 2)
-        X_wann = zeros(Nk_wann)
-        nk_per_seg = Nk_wann / length(path_lengths)
-        for i in eachindex(path_lengths)
-            i0w = round(Int, (i-1)*nk_per_seg) + 1
-            i1w = round(Int, i*nk_per_seg)
-            offset = i == 1 ? 0.0 : sum(path_lengths[1:i-1])
-            X_wann[i0w:i1w] .= offset .+ range(0, path_lengths[i], length = i1w - i0w + 1)
+        # Unpack (data, kx) tuple if extract_MLWFs was called directly
+        wann_data, kx_wann = wann isa Tuple ? wann : (wann, nothing)
+        wann1 = wann_data isa Dict ? wann_data["up"]   : wann_data
+        wann2 = wann_data isa Dict ? wann_data["down"] : wann_data
+
+        # Rescale Wannier kx (uniform [0,kmax]) onto the DFT X grid (non-uniform).
+        # Both paths share the same segment count; rescale each segment independently.
+        if !isnothing(kx_wann)
+            # Find segment boundaries in the Wannier kx array (jump > median step)
+            diffs    = diff(kx_wann)
+            med_step = median(diffs)
+            seg_ends = [i for i in eachindex(diffs) if diffs[i] > 2*med_step]
+            seg_bounds = vcat(1, seg_ends .+ 1, length(kx_wann) + 1)  # start indices + sentinel
+            Nseg = length(seg_bounds) - 1
+            X_wann = zeros(length(kx_wann))
+            for i in 1:Nseg
+                i0w = seg_bounds[i]; i1w = seg_bounds[i+1] - 1
+                offset = i == 1 ? 0.0 : sum(path_lengths[1:i-1])
+                X_wann[i0w:i1w] .= offset .+ range(0, path_lengths[i], length = i1w - i0w + 1)
+            end
+        else
+            X_wann = X   # fallback: assume same grid
         end
+
         for w in axes(wann1, 1)
             scatter!(ax,  X_wann, wann1[w, :]; color=RGBf(0.22, 0.596, 0.149), markersize=3)
         end
@@ -461,7 +481,7 @@ function extract_energies_eig(wannier_eig::String, win::String, Nb_min::Int, Nb_
     end
     bands = map_to_original_bands(collect(1:Nb_found), extract_excluded_bands(win))
     (maximum(bands) < Nb_max || minimum(bands) > Nb_min) &&
-        error("Bands in $wannier_eig don't match range $(Nb_min)–$Nb_max after exclusions.")
+        error("Bands in $wannier_eig don't match range $(Nb_min)–$(Nb_max) after exclusions.")
     E = zeros(Nk, Nb_max - Nb_min + 1)
     for line in eachline(wannier_eig)
         f = split(strip(line))
