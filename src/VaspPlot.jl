@@ -450,7 +450,7 @@ function extract_energies_eig(wannier_eig::String, win::String, Nb_min::Int, Nb_
     end
     bands = map_to_original_bands(collect(1:Nb_found), extract_excluded_bands(win))
     (maximum(bands) < Nb_max || minimum(bands) > Nb_min) &&
-        error("Bands in $wannier_eig don't match range $Nb_min–$Nb_max after exclusions.")
+        error("Bands in $wannier_eig don't match range $(Nb_min)–$Nb_max after exclusions.")
     E = zeros(Nk, Nb_max - Nb_min + 1)
     for line in eachline(wannier_eig)
         f = split(strip(line))
