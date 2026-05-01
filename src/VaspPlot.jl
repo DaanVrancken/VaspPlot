@@ -284,18 +284,21 @@ function extract_MLWFs(wannier_1::String, wannier_2::String)
     return Dict("up" => extract_MLWFs(wannier_1), "down" => extract_MLWFs(wannier_2))
 end
 
+# Allow `extract_MLWFs(...) .- Ef` when the return value is a spin Dict
+Base.:-(d::Dict{String, Matrix{Float64}}, x::Real) = Dict(k => v .- x for (k, v) in d)
+Base.:-(x::Real, d::Dict{String, Matrix{Float64}}) = Dict(k => x .- v for (k, v) in d)
+
 # ============================================================
 # §4  Plotting
 # ============================================================
 
-# Shared axis style keyword arguments
-function _band_axis_kwargs(x_ticks, klabels, xlim, ylims, pt)
+# Shared axis style keyword arguments (xticks passed separately to avoid type issues)
+function _band_axis_kwargs(xlim, ylims, pt)
     return (
         ylabel          = L"E - E_F \;\; \textrm{[eV]}",
         limits          = (xlim[1], xlim[2], ylims[1], ylims[2]),
         xlabelsize      = 11pt, ylabelsize  = 11pt,
         xticklabelsize  = 8pt,  yticklabelsize = 8pt,
-        xticks          = (x_ticks, klabels),
         xticksize       = 5pt,  yticksize   = 5pt,
         xtickalign = 1, ytickalign = 1,
         xminortickalign = 1, yminortickalign = 1,
@@ -354,9 +357,9 @@ function plot_bands(bands;
         fonts           = (; regular = "Dejavu", weird = "Blackchancery"),
         figure_padding  = (4, 4, 4, 8))
 
-    ax_kwargs = _band_axis_kwargs(x_ticks, klabels, (first(X), last(X)), ylims, pt)
-    ax  = Axis(fig[1, 1]; ax_kwargs...)
-    ax2 = double_plot ? Axis(fig[1, !isnothing(proj) ? 3 : 2]; ax_kwargs...) : nothing
+    ax_kwargs = _band_axis_kwargs((first(X), last(X)), ylims, pt)
+    ax  = Axis(fig[1, 1]; xticks=(x_ticks, klabels), ax_kwargs...)
+    ax2 = double_plot ? Axis(fig[1, !isnothing(proj) ? 3 : 2]; xticks=(x_ticks, klabels), ax_kwargs...) : nothing
     hlines!(ax, 0.0, color=:grey41, linestyle=:dash, linewidth=1.5)
     !isnothing(ax2) && hlines!(ax2, 0.0, color=:grey41, linestyle=:dash, linewidth=1.5)
 
@@ -394,14 +397,22 @@ function plot_bands(bands;
     if !isnothing(wann)
         wann1 = wann isa Dict ? wann["up"]   : wann
         wann2 = wann isa Dict ? wann["down"] : wann
+        # Build the same non-uniform x-grid for the Wannier k-points
+        Nk_wann = size(wann1, 2)
+        X_wann = zeros(Nk_wann)
+        nk_per_seg = Nk_wann / length(path_lengths)
+        for i in eachindex(path_lengths)
+            i0w = round(Int, (i-1)*nk_per_seg) + 1
+            i1w = round(Int, i*nk_per_seg)
+            offset = i == 1 ? 0.0 : sum(path_lengths[1:i-1])
+            X_wann[i0w:i1w] .= offset .+ range(0, path_lengths[i], length = i1w - i0w + 1)
+        end
         for w in axes(wann1, 1)
-            scatter!(ax,  range(0, maximum(X), length(wann1[w, :])), wann1[w, :];
-                     color=RGBf(0.22, 0.596, 0.149), markersize=3)
+            scatter!(ax,  X_wann, wann1[w, :]; color=RGBf(0.22, 0.596, 0.149), markersize=3)
         end
         if double_plot
             for w in axes(wann2, 1)
-                scatter!(ax2, range(0, maximum(X), length(wann2[w, :])), wann2[w, :];
-                         color=RGBf(0.22, 0.596, 0.149), markersize=3)
+                scatter!(ax2, X_wann, wann2[w, :]; color=RGBf(0.22, 0.596, 0.149), markersize=3)
             end
         end
     end
@@ -450,7 +461,7 @@ function extract_energies_eig(wannier_eig::String, win::String, Nb_min::Int, Nb_
     end
     bands = map_to_original_bands(collect(1:Nb_found), extract_excluded_bands(win))
     (maximum(bands) < Nb_max || minimum(bands) > Nb_min) &&
-        error("Bands in $wannier_eig don't match range $(Nb_min)–$Nb_max after exclusions.")
+        error("Bands in $wannier_eig don't match range $Nb_min–$Nb_max after exclusions.")
     E = zeros(Nk, Nb_max - Nb_min + 1)
     for line in eachline(wannier_eig)
         f = split(strip(line))
