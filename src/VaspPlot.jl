@@ -322,6 +322,18 @@ function plot_bands(bands;
         k_labels
     end
 
+    # If automatic label detection misses points, keep ticks readable
+    # by assigning deterministic fallback labels (K1, K2, ...).
+    if k_labels == [" "]
+        fallback_id = 1
+        for i in eachindex(klabels)
+            if isempty(strip(klabels[i]))
+                klabels[i] = "K$(fallback_id)"
+                fallback_id += 1
+            end
+        end
+    end
+
     E      = bands["E"]
     system = bands["system"]
     k_ind, klabels = merge_indices_and_labels(bands["k_ind"], klabels)
@@ -408,20 +420,33 @@ function plot_bands(bands;
         wann1 = wann_data isa Dict ? wann_data["up"]   : wann_data
         wann2 = wann_data isa Dict ? wann_data["down"] : wann_data
 
-        # Rescale Wannier kx (uniform [0,kmax]) onto the DFT X grid (non-uniform).
-        # Both paths share the same segment count; rescale each segment independently.
+        # Rescale Wannier kx onto the DFT X grid.
+        # Prefer exact reuse when both samplings have same number of k-points.
         if !isnothing(kx_wann)
-            # Find segment boundaries in the Wannier kx array (jump > median step)
-            diffs    = diff(kx_wann)
-            med_step = median(diffs)
-            seg_ends = [i for i in eachindex(diffs) if diffs[i] > 2*med_step]
-            seg_bounds = vcat(1, seg_ends .+ 1, length(kx_wann) + 1)  # start indices + sentinel
-            Nseg = length(seg_bounds) - 1
-            X_wann = zeros(length(kx_wann))
-            for i in 1:Nseg
-                i0w = seg_bounds[i]; i1w = seg_bounds[i+1] - 1
-                offset = i == 1 ? 0.0 : sum(path_lengths[1:i-1])
-                X_wann[i0w:i1w] .= offset .+ range(0, path_lengths[i], length = i1w - i0w + 1)
+            if length(kx_wann) == length(X)
+                X_wann = copy(X)
+            else
+                # Segment boundaries in Wannier path: detect resets/non-monotonic steps.
+                # This is robust for files that restart k-distance at each segment.
+                diffs = diff(kx_wann)
+                seg_ends = [i for i in eachindex(diffs) if diffs[i] <= 0]
+                seg_bounds = vcat(1, seg_ends .+ 1, length(kx_wann) + 1)
+                Nseg_wann = length(seg_bounds) - 1
+
+                if Nseg_wann == length(path_lengths)
+                    X_wann = zeros(length(kx_wann))
+                    for i in 1:Nseg_wann
+                        i0w = seg_bounds[i]
+                        i1w = seg_bounds[i + 1] - 1
+                        offset = i == 1 ? 0.0 : sum(path_lengths[1:i-1])
+                        X_wann[i0w:i1w] .= offset .+ range(0, path_lengths[i], length = i1w - i0w + 1)
+                    end
+                else
+                    # Conservative fallback: globally rescale to DFT x-range.
+                    kmin, kmax = extrema(kx_wann)
+                    scale = isapprox(kmax, kmin) ? 0.0 : (last(X) - first(X)) / (kmax - kmin)
+                    X_wann = first(X) .+ (kx_wann .- kmin) .* scale
+                end
             end
         else
             X_wann = X   # fallback: assume same grid
